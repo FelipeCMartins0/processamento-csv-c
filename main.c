@@ -2,6 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "lista.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 
 static void limpar_buffer(void) {
@@ -92,6 +95,10 @@ static void menu_carregar(Lista *l) {
 
 
 int main(void) {
+#ifdef _WIN32
+    SetConsoleCP(CP_UTF8);
+    SetConsoleOutputCP(CP_UTF8);
+#endif
     Lista l;
     lista_inicializar(&l);
 

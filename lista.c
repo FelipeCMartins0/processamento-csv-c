@@ -2,9 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#ifdef _WIN32
-#include <windows.h>
-#endif
+#include <dirent.h>
 #include "lista.h"
 
 void lista_inicializar(Lista *l) {
@@ -150,43 +148,41 @@ int carregar_csv(const char *arquivo, Lista *l, int pular_cabecalho) {
 }
 
 static const char *CABECALHO =
-    "sigla_tribunal;procedimento;ramo_justica;sigla_grau;uf_oj;municipio_oj;"
-    "id_ultimo_oj;nome;mesano_cnm1;mesano_sent;casos_novos_2026;julgados_2026;"
-    "prim_sent2026;suspensos_2026;dessobrestados_2026;cumprimento_meta1;"
-    "distm2_a;julgm2_a;suspm2_a;cumprimento_meta2a;distm2_ant;julgm2_ant;"
-    "suspm2_ant;desom2_ant;cumprimento_meta2ant;distm4_a;julgm4_a;suspm4_a;"
-    "cumprimento_meta4a;distm4_b;julgm4_b;suspm4_b;cumprimento_meta4b\n";
+    "sigla_tribunal,procedimento,ramo_justica,sigla_grau,uf_oj,municipio_oj,"
+    "id_ultimo_oj,nome,mesano_cnm1,mesano_sent,casos_novos_2026,julgados_2026,"
+    "prim_sent2026,suspensos_2026,dessobrestados_2026,cumprimento_meta1,"
+    "distm2_a,julgm2_a,suspm2_a,cumprimento_meta2a,distm2_ant,julgm2_ant,"
+    "suspm2_ant,desom2_ant,cumprimento_meta2ant,distm4_a,julgm4_a,suspm4_a,"
+    "cumprimento_meta4a,distm4_b,julgm4_b,suspm4_b,cumprimento_meta4b\n";
+
+static int eh_csv(const char *nome) {
+    size_t n = strlen(nome);
+    if (n < 4) return 0;
+    const char *ext = nome + n - 4;
+    return ext[0] == '.' &&
+           tolower((unsigned char)ext[1]) == 'c' &&
+           tolower((unsigned char)ext[2]) == 's' &&
+           tolower((unsigned char)ext[3]) == 'v';
+}
 
 void concatenar_arquivos(const char *pasta, const char *saida) {
-#ifdef _WIN32
+    const char *dir = (pasta && pasta[0] != '\0') ? pasta : ".";
+
+    DIR *d = opendir(dir);
+    if (!d) { fprintf(stderr, "Erro: nao foi possivel abrir a pasta '%s'\n", dir); return; }
+
     FILE *fout = fopen(saida, "w");
-    if (!fout) { fprintf(stderr, "Erro ao criar '%s'\n", saida); return; }
+    if (!fout) { fprintf(stderr, "Erro ao criar '%s'\n", saida); closedir(d); return; }
     fputs(CABECALHO, fout);
 
-    char padrao[768];
-    if (pasta && pasta[0] != '\0')
-        snprintf(padrao, sizeof(padrao), "%s\\*.csv", pasta);
-    else
-        strncpy(padrao, "*.csv", sizeof(padrao) - 1);
-
-    WIN32_FIND_DATA fd;
-    HANDLE hFind = FindFirstFile(padrao, &fd);
-    if (hFind == INVALID_HANDLE_VALUE) {
-        fprintf(stderr, "Nenhum CSV encontrado em '%s'\n", pasta ? pasta : ".");
-        fclose(fout);
-        return;
-    }
-
-    int total = 0;
-    do {
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-        if (strcmp(fd.cFileName, saida) == 0) continue;
+    int total = 0, arquivos = 0;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (!eh_csv(ent->d_name)) continue;
+        if (strcmp(ent->d_name, saida) == 0) continue;
 
         char caminho[768];
-        if (pasta && pasta[0] != '\0')
-            snprintf(caminho, sizeof(caminho), "%s\\%s", pasta, fd.cFileName);
-        else
-            strncpy(caminho, fd.cFileName, sizeof(caminho) - 1);
+        snprintf(caminho, sizeof(caminho), "%s/%s", dir, ent->d_name);
 
         FILE *fin = fopen(caminho, "r");
         if (!fin) { fprintf(stderr, "Aviso: nao abriu '%s'\n", caminho); continue; }
@@ -201,48 +197,20 @@ void concatenar_arquivos(const char *pasta, const char *saida) {
             size_t len = strlen(linha);
             if (len > 0 && linha[len-1] != '\n') fputc('\n', fout);
             linhas++;
-            total++;
         }
         fclose(fin);
-        printf("  -> %d linhas de '%s'\n", linhas, caminho);
-    } while (FindNextFile(hFind, &fd));
-
-    FindClose(hFind);
-    fclose(fout);
-    printf("Concatenacao concluida: %d linhas em '%s'\n", total, saida);
-#else
-    FILE *fout = fopen(saida, "w");
-    if (!fout) { fprintf(stderr, "Erro ao criar '%s'\n", saida); return; }
-    fputs(CABECALHO, fout);
-    printf("Digite os nomes dos arquivos CSV (linha vazia para terminar):\n");
-    char nome[512], caminho[768];
-    int total = 0;
-    while (1) {
-        printf("Arquivo: ");
-        if (!fgets(nome, sizeof(nome), stdin)) break;
-        nome[strcspn(nome, "\r\n")] = '\0';
-        if (nome[0] == '\0') break;
-        if (pasta && pasta[0] != '\0')
-            snprintf(caminho, sizeof(caminho), "%s/%s", pasta, nome);
-        else
-            strncpy(caminho, nome, sizeof(caminho) - 1);
-        FILE *fin = fopen(caminho, "r");
-        if (!fin) { fprintf(stderr, "Aviso: nao abriu '%s'\n", caminho); continue; }
-        char linha[MAX_LINHA];
-        fgets(linha, sizeof(linha), fin);
-        int linhas = 0;
-        while (fgets(linha, sizeof(linha), fin)) {
-            if (linha[0] == '\n' || linha[0] == '\r') continue;
-            fputs(linha, fout);
-            linhas++;
-            total++;
-        }
-        fclose(fin);
+        total += linhas;
+        arquivos++;
         printf("  -> %d linhas de '%s'\n", linhas, caminho);
     }
+
+    closedir(d);
     fclose(fout);
-    printf("Concatenacao concluida: %d linhas em '%s'\n", total, saida);
-#endif
+
+    if (arquivos == 0)
+        printf("Nenhum CSV encontrado em '%s'\n", dir);
+    else
+        printf("Concatenacao concluida: %d arquivo(s), %d linhas em '%s'\n", arquivos, total, saida);
 }
 
 #define COL_SIGLA        0
@@ -275,17 +243,20 @@ typedef struct Resumo {
 } Resumo;
 
 static Resumo *buscar_ou_criar(Resumo **lista, const char *sigla) {
-    Resumo *r = *lista;
-    while (r) {
-        if (strcmp(r->sigla, sigla) == 0) return r;
+    Resumo *ant = NULL, *r = *lista;
+    while (r && strcmp(r->sigla, sigla) < 0) {
+        ant = r;
         r = r->prox;
     }
-    r = (Resumo *)calloc(1, sizeof(Resumo));
-    if (!r) return NULL;
-    strncpy(r->sigla, sigla, MAX_CAMPO - 1);
-    r->prox = *lista;
-    *lista = r;
-    return r;
+    if (r && strcmp(r->sigla, sigla) == 0) return r;
+
+    Resumo *novo = (Resumo *)calloc(1, sizeof(Resumo));
+    if (!novo) return NULL;
+    strncpy(novo->sigla, sigla, MAX_CAMPO - 1);
+    novo->prox = r;
+    if (ant) ant->prox = novo;
+    else     *lista = novo;
+    return novo;
 }
 
 static void liberar_resumos(Resumo *r) {
@@ -364,28 +335,44 @@ void gerar_resumo(Lista *l, const char *saida) {
     liberar_resumos(resumos);
 }
 
-static void to_upper(char *s) {
-    while (*s) {
-        *s = (char)toupper((unsigned char)*s);
-        s++;
+static void normalizar(const char *src, char *dst, size_t tam) {
+    size_t j = 0;
+    for (size_t i = 0; src[i] != '\0' && j < tam - 1; i++) {
+        unsigned char c = (unsigned char)src[i];
+
+        if (c == 0xC3 && src[i+1] != '\0') {
+            unsigned char b = (unsigned char)src[++i];
+            if (b >= 0xA0) b -= 0x20;
+            char base;
+            if      (b >= 0x80 && b <= 0x85) base = 'A';
+            else if (b == 0x87)              base = 'C';
+            else if (b >= 0x88 && b <= 0x8B) base = 'E';
+            else if (b >= 0x8C && b <= 0x8F) base = 'I';
+            else if (b == 0x91)              base = 'N';
+            else if (b >= 0x92 && b <= 0x96) base = 'O';
+            else if (b >= 0x99 && b <= 0x9C) base = 'U';
+            else continue;
+            dst[j++] = base;
+        } else {
+            dst[j++] = (char)toupper(c);
+        }
     }
+    dst[j] = '\0';
 }
 
 void filtrar_municipio(Lista *l, const char *municipio) {
     char mun_upper[MAX_CAMPO];
-    strncpy(mun_upper, municipio, MAX_CAMPO - 1);
-    mun_upper[MAX_CAMPO - 1] = '\0';
-    to_upper(mun_upper);
+    normalizar(municipio, mun_upper, sizeof(mun_upper));
 
     char nome_arq[MAX_CAMPO + 4];
     snprintf(nome_arq, sizeof(nome_arq), "%s.csv", mun_upper);
 
     int encontrados = 0;
     No *no = l->inicio;
-    char mun_no[MAX_CAMPO];
+    char campo[MAX_CAMPO], mun_no[MAX_CAMPO];
     while (no) {
-        get_campo(no->linha, 5, mun_no);
-        to_upper(mun_no);
+        get_campo(no->linha, 5, campo);
+        normalizar(campo, mun_no, sizeof(mun_no));
         if (strcmp(mun_no, mun_upper) == 0) encontrados++;
         no = no->prox;
     }
@@ -402,8 +389,8 @@ void filtrar_municipio(Lista *l, const char *municipio) {
 
     no = l->inicio;
     while (no) {
-        get_campo(no->linha, 5, mun_no);
-        to_upper(mun_no);
+        get_campo(no->linha, 5, campo);
+        normalizar(campo, mun_no, sizeof(mun_no));
         if (strcmp(mun_no, mun_upper) == 0) {
             fputs(no->linha, fp);
             fputc('\n', fp);
